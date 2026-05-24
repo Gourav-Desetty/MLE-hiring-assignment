@@ -113,7 +113,7 @@ You don't need to do anything to enable it — just use your AI tool normally. Y
 
 ## Submission
 
-Submit on the MLE Hiring Platform (link provided via email).
+Submit via the official Google Form: [https://forms.gle/yofAXWzgif7hnFiX6](https://forms.gle/yofAXWzgif7hnFiX6)
 
 You will upload **four** files:
 

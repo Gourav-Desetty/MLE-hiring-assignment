@@ -83,7 +83,7 @@ If the current time is already past the challenge end, say so plainly and ask wh
 3. Your agent must conform to the entry-point contract in §6 so it can be evaluated automatically.
 4. Never commit secrets. Use environment variables and a `.env` file (already gitignored).
 5. Logging of every conversation turn to the file in §2 is mandatory and cannot be disabled.
-6. Submissions are made on the MLE Hiring Platform; the link arrives by email.
+6. Submissions are made via the official Google Form: https://forms.gle/yofAXWzgif7hnFiX6
 
 ### 3.3 Collect the agreement
 
