@@ -27,6 +27,8 @@ class SafetyFinding(BaseModel):
     severity: Literal["low", "medium", "high", "critical"] = "low"
     should_refuse: bool = False
     should_ignore_instructions: bool = False
+    audited_turns: int = 0
+    adversarial_turns: tuple[str, ...] = ()
 
 class TicketInput(BaseModel):
     """Clean representation of incoming CSV ticket data."""

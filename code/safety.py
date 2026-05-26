@@ -29,7 +29,8 @@ REFUSAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "system role injection",
         re.compile(
-            r"(\[system\b|\bsystem\s*override\b|<\s*/?\s*system\s*>|\bdeveloper message\b|"
+            r"(\[system\b|\bsystem\s*(override|message|update|instruction)\b|"
+            r"<\s*/?\s*system\s*>|\bdeveloper message\b|\bdeveloper\s*(update|instruction)\b|"
             r"\byou are now\b|\bact as\b.{0,50}\b(system|developer|admin|root)\b|maintenance mode)",
             re.I | re.S,
         ),
@@ -63,9 +64,14 @@ REFUSAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "classification manipulation",
         re.compile(
-            r"\b(classify|mark|label|set|output|return|write)\b.{0,80}"
-            r"\b(status|request_type|risk_level|confidence_score|actions_taken)\b.{0,80}"
-            r"\b(replied|escalated|invalid|low|1\.?0?|empty|\[\])\b",
+            r"("
+            r"\b(classify|mark|label|set|output|return|write)\b.{0,100}"
+            r"\b(status|request_type|risk_level|confidence_score|actions_taken|this|ticket|case)\b.{0,100}"
+            r"\b(replied|escalated|invalid|low|1\.?0?|empty|\[\])\b"
+            r"|"
+            r"\b(status|request_type|risk_level|confidence_score|actions_taken)\s*[:=]\s*"
+            r"(replied|escalated|invalid|low|1\.?0?|\[\])"
+            r")",
             re.I | re.S,
         ),
     ),
@@ -145,18 +151,58 @@ COMPACT_REFUSAL_PHRASES = (
 
 def detect_prompt_injection(text: str) -> SafetyFinding:
     """Detect prompt injection and social-engineering attempts in raw text."""
+    return _audit_segments((("text", text),))
+
+
+def detect_ticket_safety(ticket: TicketInput) -> SafetyFinding:
+    """Audit subject, company, and every conversation turn independently."""
+    segments: list[tuple[str, str]] = [
+        ("company", ticket.company),
+        ("subject", ticket.subject),
+    ]
+    for index, message in enumerate(ticket.issue):
+        role = str(message.get("role", "unknown")).strip() or "unknown"
+        content = str(message.get("content", ""))
+        segments.append((f"turn[{index}].{role}", content))
+    return audit_conversation(segments)
+
+
+def audit_conversation(segments: list[tuple[str, str]] | tuple[tuple[str, str], ...]) -> SafetyFinding:
+    """Sequentially audit labeled conversation segments.
+
+    This catches mid-conversation control attempts without relying on the final
+    user message or on one large concatenated string. Labels should identify the
+    source, e.g. "subject" or "turn[2].user".
+    """
+    return _audit_segments(tuple(segments))
+
+
+def _audit_segments(segments: tuple[tuple[str, str], ...]) -> SafetyFinding:
     reasons: list[str] = []
+    adversarial_segments: list[str] = []
     refusal_found = False
     suspicious_found = False
 
-    for surface_name, surface_text in _inspection_surfaces(text):
-        surface_reasons, surface_refusal, surface_suspicious = _scan_surface(surface_text)
-        refusal_found = refusal_found or surface_refusal
-        suspicious_found = suspicious_found or surface_suspicious
-        for reason in surface_reasons:
-            reasons.append(reason if surface_name == "raw" else f"{surface_name}: {reason}")
+    for label, text in segments:
+        segment_reasons: list[str] = []
+        segment_refusal = False
+        segment_suspicious = False
+        for surface_name, surface_text in _inspection_surfaces(text):
+            surface_reasons, surface_refusal, surface_suspicious = _scan_surface(surface_text)
+            segment_refusal = segment_refusal or surface_refusal
+            segment_suspicious = segment_suspicious or surface_suspicious
+            for reason in surface_reasons:
+                surface_reason = reason if surface_name == "raw" else f"{surface_name}: {reason}"
+                segment_reasons.append(surface_reason)
+                reasons.append(f"{label}: {surface_reason}")
+
+        if segment_reasons:
+            adversarial_segments.append(label)
+        refusal_found = refusal_found or segment_refusal
+        suspicious_found = suspicious_found or segment_suspicious
 
     unique_reasons = tuple(dict.fromkeys(reasons))
+    unique_segments = tuple(dict.fromkeys(adversarial_segments))
     severity = _severity(unique_reasons, refusal_found, suspicious_found)
     return SafetyFinding(
         is_adversarial=bool(unique_reasons),
@@ -164,17 +210,9 @@ def detect_prompt_injection(text: str) -> SafetyFinding:
         severity=severity,
         should_refuse=refusal_found,
         should_ignore_instructions=bool(unique_reasons),
+        audited_turns=len(segments),
+        adversarial_turns=unique_segments,
     )
-
-
-def detect_ticket_safety(ticket: TicketInput) -> SafetyFinding:
-    """Scan subject, company, and every conversation turn as one ticket surface."""
-    parts = [f"company: {ticket.company}", f"subject: {ticket.subject}"]
-    for message in ticket.issue:
-        role = str(message.get("role", "unknown"))
-        content = str(message.get("content", ""))
-        parts.append(f"{role}: {content}")
-    return detect_prompt_injection("\n".join(parts))
 
 
 def _scan_surface(text: str) -> tuple[list[str], bool, bool]:
