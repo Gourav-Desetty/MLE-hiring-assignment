@@ -1,7 +1,8 @@
 from __future__ import annotations
 import json
 from pathlib import Path
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from typing import Any, Literal
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from tools import actions_to_json, validate_actions_taken
 
@@ -14,21 +15,30 @@ CSV_HEADERS = [
 
 STRICT_CONFIG = ConfigDict(
     extra="forbid",
+    populate_by_name=True,
     str_strip_whitespace=True,
     validate_assignment=True
 )
+
+class SafetyFinding(BaseModel):
+    model_config = STRICT_CONFIG
+    is_adversarial: bool = False
+    reasons: tuple[str, ...] = ()
+    severity: Literal["low", "medium", "high", "critical"] = "low"
+    should_refuse: bool = False
+    should_ignore_instructions: bool = False
 
 class TicketInput(BaseModel):
     """Clean representation of incoming CSV ticket data."""
     model_config = STRICT_CONFIG
     
-    issue: list[dict[str, str]]
-    subject: str = ""
-    company: str = "None"
+    issue: list[dict[str, str]] = Field(validation_alias=AliasChoices("issue", "Issue"))
+    subject: str = Field(default="", validation_alias=AliasChoices("subject", "Subject"))
+    company: str = Field(default="None", validation_alias=AliasChoices("company", "Company"))
 
     @field_validator("issue", mode="before")
     @classmethod
-    def parse_issue_json(cls, value: any) -> any:
+    def parse_issue_json(cls, value: Any) -> Any:
         if isinstance(value, str):
             try:
                 return json.loads(value)
