@@ -6,7 +6,6 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from tools import actions_to_json, validate_actions_taken
 
-# Global target schema fields tracking evaluation order
 CSV_HEADERS = [
     "issue", "subject", "company", "response", "product_area", "status",
     "request_type", "justification", "confidence_score", "source_documents",
@@ -120,3 +119,46 @@ class TicketOutput(BaseModel):
             "language": self.language[:2].lower(),
             "actions_taken": actions_to_json(self.actions_taken)
         }
+
+class RetrievedDoc(BaseModel):
+    model_config = STRICT_CONFIG
+    path: str
+    title: str
+    snippet: str
+    score: float
+
+
+class StructuredDecision(BaseModel):
+    """Strict schema expected from the LLM decision step before final calibration."""
+    model_config = STRICT_CONFIG
+
+    response: str = Field(min_length=1)
+    product_area: str = Field(min_length=1)
+    status: str = "escalated"
+    request_type: str = "invalid"
+    justification: str = Field(min_length=1)
+    confidence_score: float = Field(ge=0.0, le=1.0)
+    risk_level: str = "medium"
+    pii_detected: bool = False
+    language: str = "en"
+    actions_taken: list[dict] = Field(default_factory=list)
+
+    @field_validator("actions_taken")
+    @classmethod
+    def check_actions_taken(cls, v: list[dict]) -> list[dict]:
+        return validate_actions_taken(v)
+
+    @field_validator("status")
+    @classmethod
+    def check_status(cls, v: str) -> str:
+        return v if v in {"replied", "escalated"} else "escalated"
+
+    @field_validator("request_type")
+    @classmethod
+    def check_request(cls, v: str) -> str:
+        return v if v in {"product_issue", "feature_request", "bug", "invalid"} else "invalid"
+
+    @field_validator("risk_level")
+    @classmethod
+    def check_risk(cls, v: str) -> str:
+        return v if v in {"low", "medium", "high", "critical"} else "medium"
