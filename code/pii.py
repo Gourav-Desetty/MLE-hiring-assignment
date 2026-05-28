@@ -33,12 +33,12 @@ def detect_and_redact(text: str) -> PiiFinding:
             break
     redacted = CARD_RE.sub("[REDACTED_CARD]", redacted)
 
-    if PHONE_RE.search(redacted):
-        kinds.append("phone")
-        redacted = PHONE_RE.sub("[REDACTED_PHONE]", redacted)
     if SSN_RE.search(redacted):
         kinds.append("ssn")
         redacted = SSN_RE.sub("[REDACTED_SSN]", redacted)
+    if PHONE_RE.search(redacted):
+        kinds.append("phone")
+        redacted = PHONE_RE.sub("[REDACTED_PHONE]", redacted)
     if ADDRESS_RE.search(redacted):
         kinds.append("address")
         redacted = ADDRESS_RE.sub("[REDACTED_ADDRESS]", redacted)

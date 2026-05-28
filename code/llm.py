@@ -4,6 +4,7 @@ import json
 import os
 from typing import Any
 
+from language import detect_language
 from pii import detect_and_redact
 
 
@@ -53,6 +54,7 @@ def deterministic_decision(payload: dict[str, Any]) -> dict[str, Any]:
     pii = payload.get("pii", {})
     docs = payload.get("retrieved_documents", [])
     text = _ticket_text(ticket)
+    language = str(payload.get("language") or detect_language(text))
     risk_level = _risk_level(text, safety)
     if pii.get("detected") and risk_level == "low":
         risk_level = "medium"
@@ -80,18 +82,18 @@ def deterministic_decision(payload: dict[str, Any]) -> dict[str, Any]:
         status = "replied"
         response = _grounded_response(docs)
         confidence = _base_confidence(docs, risk_level, safety, escalated=False)
-        actions_taken = []
+        actions_taken = [_verify_identity_action(pii)] if _needs_identity_verification(text) else []
 
     return {
         "response": response,
         "product_area": product_area,
         "status": status,
         "request_type": request_type,
-        "justification": _justification(status, docs, safety, risk_level),
+        "justification": _justification(status, docs, safety, pii, text, risk_level),
         "confidence_score": confidence,
         "risk_level": risk_level,
         "pii_detected": bool(pii.get("detected")) or _pii_detected(text),
-        "language": "en",
+        "language": language,
         "actions_taken": actions_taken,
     }
 
@@ -122,6 +124,34 @@ def _request_type(text: str) -> str:
     if any(term in text for term in ("ignore previous", "system prompt", "classify this")):
         return "invalid"
     return "product_issue"
+
+
+def _needs_identity_verification(text: str) -> bool:
+    account_terms = (
+        "refund",
+        "chargeback",
+        "cancel",
+        "downgrade",
+        "upgrade",
+        "pause subscription",
+        "modify subscription",
+        "change my plan",
+        "delete my account",
+        "close my account",
+    )
+    return any(term in text for term in account_terms)
+
+
+def _verify_identity_action(pii: dict[str, Any]) -> dict[str, Any]:
+    target = str(pii.get("safe_contact") or "account_contact_on_file")
+    method = "email_otp" if "@" in target else "security_questions"
+    return {
+        "action": "verify_identity",
+        "parameters": {
+            "method": method,
+            "target": target,
+        },
+    }
 
 
 def _product_area(text: str, docs: list[Any]) -> str:
@@ -188,12 +218,41 @@ def _grounded_response(docs: list[Any]) -> str:
     return f"Based on {title}, the retrieved support documentation contains the relevant guidance for this request."
 
 
-def _justification(status: str, docs: list[Any], safety: dict[str, Any], risk_level: str) -> str:
+def _justification(
+    status: str,
+    docs: list[Any],
+    safety: dict[str, Any],
+    pii: dict[str, Any],
+    text: str,
+    risk_level: str,
+) -> str:
     parts = [f"Deterministic fallback selected {status} with {risk_level} risk."]
+    reasons = _escalation_reasons(safety, pii, text)
+    if reasons:
+        parts.append("Escalation factors: " + "; ".join(reasons) + ".")
     if docs:
         parts.append("Retrieved support documents were available for grounding.")
     else:
         parts.append("No sufficiently relevant support documents were retrieved.")
-    if safety.get("is_adversarial"):
-        parts.append("Adversarial or manipulation patterns were detected and ignored.")
     return " ".join(parts)
+
+
+def _escalation_reasons(safety: dict[str, Any], pii: dict[str, Any], text: str) -> list[str]:
+    reasons: list[str] = []
+    safety_reasons = " ".join(str(reason).lower() for reason in safety.get("reasons", ()))
+    pii_kinds = tuple(str(kind) for kind in pii.get("kinds", ()))
+
+    if safety.get("should_refuse") or "instruction override" in safety_reasons or "prompt disclosure" in safety_reasons:
+        reasons.append("prompt injection attempt detected")
+    if "classification manipulation" in safety_reasons:
+        reasons.append("classification manipulation attempt detected")
+    if any(term in text for term in ("legal", "lawsuit", "sue", "attorney", "lawyer")):
+        reasons.append("legal threat or legal escalation language found")
+    if any(kind in pii_kinds for kind in ("ssn", "card")):
+        reasons.append("SSN or card number detected")
+    elif pii_kinds:
+        reasons.append("personal information detected")
+    if any(term in text for term in ("account takeover", "identity theft", "stolen", "fraud", "unauthorized")):
+        reasons.append("account takeover or fraud indicators found")
+
+    return list(dict.fromkeys(reasons))[:4]
