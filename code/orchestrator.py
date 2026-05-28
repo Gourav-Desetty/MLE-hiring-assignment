@@ -4,7 +4,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from models import RetrievedDoc, SafetyFinding, StructuredDecision, TicketInput, TicketOutput
+from models import PiiFinding, RetrievedDoc, SafetyFinding, StructuredDecision, TicketInput, TicketOutput
+from pii import contains_unredacted_pii, detect_and_redact
 from retrieval import CorpusIndex
 from safety import detect_ticket_safety
 from tools import ToolValidationError, validate_actions_taken
@@ -24,6 +25,7 @@ def build_llm_payload(
     ticket: TicketInput,
     retrieved_docs: list[RetrievedDoc],
     safety: SafetyFinding,
+    pii: PiiFinding,
 ) -> dict[str, Any]:
     """Build the provider-agnostic structured LLM input."""
     return {
@@ -33,12 +35,13 @@ def build_llm_payload(
             "request_type": ["product_issue", "feature_request", "bug", "invalid"],
             "risk_level": ["low", "medium", "high", "critical"],
         },
-        "ticket": {
-            "company": ticket.company,
-            "subject": ticket.subject,
-            "issue": ticket.issue,
-        },
+        "ticket": _redacted_ticket_payload(ticket),
         "safety": safety.model_dump(),
+        "pii": {
+            "detected": pii.detected,
+            "kinds": pii.kinds,
+            "card_tail": pii.card_tail,
+        },
         "retrieved_documents": [doc.model_dump() for doc in retrieved_docs],
         "rules": [
             "Use only retrieved_documents for factual support claims.",
@@ -60,11 +63,12 @@ def run_structured_decision(
     """Retrieve evidence, call the structured LLM, validate, calibrate, and finalize."""
     safety = detect_ticket_safety(ticket)
     query = _ticket_query(ticket)
-    retrieved_docs = [] if safety.should_refuse else index.search(query, ticket.company, limit=limit)
-    payload = build_llm_payload(ticket, retrieved_docs, safety)
+    pii = detect_and_redact(query)
+    retrieved_docs = [] if safety.should_refuse else index.search(pii.redacted_text, ticket.company, limit=limit)
+    payload = build_llm_payload(ticket, retrieved_docs, safety, pii)
     raw_decision = llm(payload)
     decision = parse_structured_decision(raw_decision)
-    return to_ticket_output(ticket, decision, retrieved_docs, safety, index)
+    return to_ticket_output(ticket, decision, retrieved_docs, safety, index, pii)
 
 
 def parse_structured_decision(raw_decision: dict[str, Any]) -> StructuredDecision:
@@ -78,13 +82,19 @@ def to_ticket_output(
     retrieved_docs: list[RetrievedDoc],
     safety: SafetyFinding,
     index: CorpusIndex,
+    pii: PiiFinding | None = None,
 ) -> TicketOutput:
     """Apply final calibration and schema checks before writing output.csv."""
+    if pii is None:
+        pii = detect_and_redact(_ticket_query(ticket))
     source_documents = "" if decision.status != "replied" else index.source_documents(retrieved_docs)
     company_contradiction = is_company_contradictory(ticket, retrieved_docs)
+    response = detect_and_redact(decision.response).redacted_text
+    pii_detected = pii.detected or decision.pii_detected or contains_unredacted_pii(decision.response)
+    risk_level = _risk_with_pii(decision.risk_level, pii)
     confidence = calibrate_confidence(
         decision.confidence_score,
-        risk_level=decision.risk_level,
+        risk_level=risk_level,
         status=decision.status,
         has_sources=bool(source_documents),
         company_contradiction=company_contradiction,
@@ -99,15 +109,15 @@ def to_ticket_output(
         issue=ticket.issue_as_json(),
         subject=ticket.subject,
         company=ticket.company,
-        response=decision.response,
+        response=response,
         product_area=decision.product_area,
         status=decision.status,
         request_type=decision.request_type,
         justification=justification,
         confidence_score=confidence,
         source_documents=source_documents,
-        risk_level=decision.risk_level,
-        pii_detected=decision.pii_detected,
+        risk_level=risk_level,
+        pii_detected=pii_detected,
         language=decision.language,
         actions_taken=actions,
     )
@@ -188,6 +198,29 @@ def _ticket_query(ticket: TicketInput) -> str:
     for message in ticket.issue:
         parts.append(str(message.get("content", "")))
     return "\n".join(part for part in parts if part)
+
+
+def _redacted_ticket_payload(ticket: TicketInput) -> dict[str, Any]:
+    redacted_issue: list[dict[str, str]] = []
+    for message in ticket.issue:
+        redacted_message = dict(message)
+        if "content" in redacted_message:
+            redacted_message["content"] = detect_and_redact(str(redacted_message["content"])).redacted_text
+        redacted_issue.append(redacted_message)
+
+    return {
+        "company": ticket.company,
+        "subject": detect_and_redact(ticket.subject).redacted_text,
+        "issue": redacted_issue,
+    }
+
+
+def _risk_with_pii(risk_level: str, pii: PiiFinding) -> str:
+    if any(kind in pii.kinds for kind in ("ssn", "card")):
+        return "high" if risk_level in {"low", "medium"} else risk_level
+    if pii.detected and risk_level == "low":
+        return "medium"
+    return risk_level
 
 
 def _domain_from_path(path: str) -> str:

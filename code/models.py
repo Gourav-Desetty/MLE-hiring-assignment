@@ -162,3 +162,13 @@ class StructuredDecision(BaseModel):
     @classmethod
     def check_risk(cls, v: str) -> str:
         return v if v in {"low", "medium", "high", "critical"} else "medium"
+
+
+class PiiFinding(BaseModel):
+    model_config = STRICT_CONFIG
+
+    detected: bool
+    redacted_text: str
+    kinds: tuple[str, ...] = ()
+    safe_contact: str | None = None
+    card_tail: str | None = None
