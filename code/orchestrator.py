@@ -92,7 +92,7 @@ def to_ticket_output(
     """Apply final calibration and schema checks before writing output.csv."""
     if pii is None:
         pii = detect_and_redact(_ticket_query(ticket))
-    source_documents = "" if decision.status != "replied" else index.source_documents(retrieved_docs)
+    source_documents = _source_documents_for_output(ticket, decision, retrieved_docs, safety, index)
     company_contradiction = is_company_contradictory(ticket, retrieved_docs)
     response = detect_and_redact(decision.response).redacted_text
     pii_detected = pii.detected or decision.pii_detected or contains_unredacted_pii(decision.response)
@@ -253,6 +253,33 @@ def _support_retrieval_query(query: str, safety: SafetyFinding) -> str:
 def _query_segments(query: str) -> list[str]:
     normalized = query.replace("\r", "\n")
     return [part.strip() for part in normalized.replace("?", ".").replace("!", ".").split(".") if part.strip()]
+
+
+def _source_documents_for_output(
+    ticket: TicketInput,
+    decision: StructuredDecision,
+    retrieved_docs: list[RetrievedDoc],
+    safety: SafetyFinding,
+    index: CorpusIndex,
+) -> str:
+    if not retrieved_docs or decision.request_type == "invalid":
+        return ""
+    if not _support_retrieval_query(detect_and_redact(_ticket_query(ticket)).redacted_text, safety):
+        return ""
+    if not _has_support_intent(_ticket_query(ticket)):
+        return ""
+    return index.source_documents(retrieved_docs)
+
+
+def _has_support_intent(text: str) -> bool:
+    lowered = text.lower()
+    support_terms = (
+        "account", "login", "password", "refund", "billing", "charge", "card",
+        "subscription", "cancel", "invoice", "bug", "error", "broken", "issue",
+        "help", "support", "claude", "visa", "devplatform", "assessment", "test",
+        "fraud", "dispute", "unauthorized", "feature request", "legal", "lawsuit",
+    )
+    return any(term in lowered for term in support_terms)
 
 
 def _augment_justification(

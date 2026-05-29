@@ -118,6 +118,8 @@ def _risk_level(text: str) -> str:
 
 
 def _request_type(text: str, safety: dict[str, Any], has_support_intent: bool) -> str:
+    if not has_support_intent:
+        return "invalid"
     if any(term in text for term in ("feature request", "please add", "can you add")):
         return "feature_request"
     if any(term in text for term in ("bug", "broken", "crash", "error", "stopped working")):
