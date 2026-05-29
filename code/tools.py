@@ -9,6 +9,74 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TOOL_SPEC_PATH = REPO_ROOT / "data" / "api_specs" / "internal_tools.json"
+FALLBACK_TOOL_SPECS: list[dict[str, Any]] = [
+    {
+        "name": "issue_refund",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "transaction_id": {"type": "string"},
+                "amount": {"type": "number"},
+                "reason": {"type": "string", "description": "Reason code for the refund: 'duplicate', 'fraud', 'customer_request', 'service_failure'"},
+            },
+            "required": ["transaction_id", "amount", "reason"],
+        },
+    },
+    {
+        "name": "reset_password",
+        "parameters": {
+            "type": "object",
+            "properties": {"user_email": {"type": "string"}},
+            "required": ["user_email"],
+        },
+    },
+    {
+        "name": "lock_account",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_identifier": {"type": "string"},
+                "lock_reason": {"type": "string", "description": "Reason for locking: 'suspected_fraud', 'user_requested', 'compliance_violation'"},
+            },
+            "required": ["user_identifier", "lock_reason"],
+        },
+    },
+    {
+        "name": "escalate_to_human",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "priority": {"type": "string", "description": "Escalation priority: 'low', 'normal', 'high', 'urgent'"},
+                "department": {"type": "string", "description": "Target department: 'billing', 'technical', 'security', 'legal', 'general'"},
+                "summary": {"type": "string"},
+            },
+            "required": ["priority", "department", "summary"],
+        },
+    },
+    {
+        "name": "modify_subscription",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_id": {"type": "string"},
+                "action": {"type": "string", "description": "The modification action: 'upgrade', 'downgrade', 'cancel', 'pause'"},
+                "target_plan": {"type": "string", "description": "The plan to move to (if upgrading/downgrading): 'free', 'pro', 'team', 'enterprise'"},
+            },
+            "required": ["user_id", "action"],
+        },
+    },
+    {
+        "name": "verify_identity",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "method": {"type": "string", "description": "Verification method: 'email_otp', 'sms_otp', 'security_questions'"},
+                "target": {"type": "string"},
+            },
+            "required": ["method", "target"],
+        },
+    },
+]
 
 
 class ToolValidationError(ValueError):
@@ -18,9 +86,15 @@ class ToolValidationError(ValueError):
 def load_tool_specs(spec_path: Path | str = DEFAULT_TOOL_SPEC_PATH) -> dict[str, dict[str, Any]]:
     """Load internal tool specs keyed by tool name."""
     path = Path(spec_path)
-    with path.open("r", encoding="utf-8") as handle:
-        raw_specs = json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            raw_specs = json.load(handle)
+        return _specs_from_raw(raw_specs)
+    except (OSError, json.JSONDecodeError, ToolValidationError):
+        return _specs_from_raw(FALLBACK_TOOL_SPECS)
 
+
+def _specs_from_raw(raw_specs: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(raw_specs, list):
         raise ToolValidationError("Tool spec must be a JSON array")
 

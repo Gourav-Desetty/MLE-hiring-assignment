@@ -18,6 +18,14 @@ STOPWORDS = {
     "help", "need", "issue", "support", "about", "into", "after", "before",
 }
 
+STEM_MAP = {
+    "cancellation": "cancel", "cancellations": "cancel", "cancelled": "cancel",
+    "refunded": "refund", "refunds": "refund", "reimbursement": "reimburse",
+    "billing": "bill", "billed": "bill", "payments": "payment",
+    "accounts": "account", "subscriptions": "subscription",
+    "passwords": "password", "logins": "login", "accessing": "access",
+}
+
 
 class CorpusIndex:
     def __init__(self, root: Path) -> None:
@@ -130,7 +138,8 @@ class CorpusIndex:
 
 
 def _tokenize(text: str) -> list[str]:
-    return [t.lower() for t in TOKEN_RE.findall(text) if t.lower() not in STOPWORDS and len(t) > 1]
+    tokens = (token.lower() for token in TOKEN_RE.findall(text))
+    return [STEM_MAP.get(token, token) for token in tokens if token not in STOPWORDS and len(token) > 1]
 
 
 def _title_for(path: Path, text: str) -> str:
