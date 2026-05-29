@@ -9,7 +9,11 @@ EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)")
 SSN_RE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 CARD_RE = re.compile(r"(?<!\d)(?:\d[ -]?){12,19}(?!\d)")
-ACCOUNT_RE = re.compile(r"\b(?:acct|account|user|customer|txn|transaction|ticket|case)[_-]?[A-Za-z0-9-]{4,}\b", re.I)
+ACCOUNT_RE = re.compile(
+    r"\b(?:acct|account|user|customer)(?:[_ -]?(?:id|number|no))?\s*[:#-]?\s*"
+    r"(?=[A-Za-z0-9_-]*(?:\d|[_-]))[A-Za-z0-9][A-Za-z0-9_-]{5,}\b",
+    re.I,
+)
 ADDRESS_RE = re.compile(r"\b\d{1,6}\s+[A-Za-z0-9 .'-]{2,60}\s+(street|st|road|rd|avenue|ave|lane|ln|drive|dr|blvd|boulevard|apt|suite)\b", re.I)
 
 

@@ -55,14 +55,17 @@ def deterministic_decision(payload: dict[str, Any]) -> dict[str, Any]:
     docs = payload.get("retrieved_documents", [])
     text = _ticket_text(ticket)
     language = str(payload.get("language") or detect_language(text))
-    risk_level = _risk_level(text, safety)
+    has_support_intent = _has_support_intent(text)
+    risk_level = _risk_level(text)
+    if safety.get("severity") == "critical" and not has_support_intent:
+        risk_level = "critical"
     if pii.get("detected") and risk_level == "low":
         risk_level = "medium"
     if any(kind in tuple(pii.get("kinds", ())) for kind in ("ssn", "card")) and risk_level in {"low", "medium"}:
         risk_level = "high"
-    request_type = _request_type(text)
+    request_type = _request_type(text, safety, has_support_intent)
     product_area = _product_area(text, docs)
-    should_escalate = bool(safety.get("should_refuse")) or risk_level in {"high", "critical"} or not docs
+    should_escalate = risk_level in {"high", "critical"} or not has_support_intent
 
     if should_escalate:
         status = "escalated"
@@ -106,9 +109,7 @@ def _ticket_text(ticket: dict[str, Any]) -> str:
     return detect_and_redact("\n".join(parts)).redacted_text.lower()
 
 
-def _risk_level(text: str, safety: dict[str, Any]) -> str:
-    if safety.get("severity") == "critical":
-        return "critical"
+def _risk_level(text: str) -> str:
     if any(term in text for term in ("identity theft", "account takeover", "stolen", "fraud", "legal", "lawsuit", "ssn")):
         return "high"
     if any(term in text for term in ("refund", "chargeback", "billing", "password", "login", "access", "card")):
@@ -116,14 +117,24 @@ def _risk_level(text: str, safety: dict[str, Any]) -> str:
     return "low"
 
 
-def _request_type(text: str) -> str:
+def _request_type(text: str, safety: dict[str, Any], has_support_intent: bool) -> str:
     if any(term in text for term in ("feature request", "please add", "can you add")):
         return "feature_request"
     if any(term in text for term in ("bug", "broken", "crash", "error", "stopped working")):
         return "bug"
-    if any(term in text for term in ("ignore previous", "system prompt", "classify this")):
+    if safety.get("should_refuse") and not has_support_intent:
         return "invalid"
     return "product_issue"
+
+
+def _has_support_intent(text: str) -> bool:
+    support_terms = (
+        "account", "login", "password", "refund", "billing", "charge", "card",
+        "subscription", "cancel", "invoice", "bug", "error", "broken", "issue",
+        "help", "support", "claude", "visa", "devplatform", "assessment", "test",
+        "fraud", "dispute", "unauthorized", "feature request",
+    )
+    return any(term in text for term in support_terms)
 
 
 def _needs_identity_verification(text: str) -> bool:

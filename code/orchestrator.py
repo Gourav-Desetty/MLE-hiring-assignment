@@ -68,7 +68,8 @@ def run_structured_decision(
     safety = detect_ticket_safety(ticket)
     query = _ticket_query(ticket)
     pii = detect_and_redact(query)
-    retrieved_docs = [] if safety.should_refuse else index.search(pii.redacted_text, ticket.company, limit=limit)
+    retrieval_query = _support_retrieval_query(pii.redacted_text, safety)
+    retrieved_docs = index.search(retrieval_query, ticket.company, limit=limit) if retrieval_query else []
     payload = build_llm_payload(ticket, retrieved_docs, safety, pii)
     raw_decision = llm(payload)
     decision = parse_structured_decision(raw_decision)
@@ -220,6 +221,38 @@ def _ticket_query(ticket: TicketInput) -> str:
     for message in ticket.issue:
         parts.append(str(message.get("content", "")))
     return "\n".join(part for part in parts if part)
+
+
+def _support_retrieval_query(query: str, safety: SafetyFinding) -> str:
+    if not safety.should_ignore_instructions:
+        return query
+
+    safe_segments: list[str] = []
+    for segment in _query_segments(query):
+        lowered = segment.lower()
+        if any(
+            marker in lowered
+            for marker in (
+                "ignore previous",
+                "disregard previous",
+                "system prompt",
+                "system instructions",
+                "developer instructions",
+                "reveal the prompt",
+                "show the prompt",
+                "classify this",
+                "set status",
+                "do not escalate",
+            )
+        ):
+            continue
+        safe_segments.append(segment)
+    return " ".join(safe_segments).strip()
+
+
+def _query_segments(query: str) -> list[str]:
+    normalized = query.replace("\r", "\n")
+    return [part.strip() for part in normalized.replace("?", ".").replace("!", ".").split(".") if part.strip()]
 
 
 def _augment_justification(
